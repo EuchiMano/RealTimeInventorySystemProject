@@ -3,6 +3,7 @@ using RealTimeInventorySystem.Data;
 using RealTimeInventorySystem.Services;
 using Microsoft.EntityFrameworkCore;
 using RealTimeInventorySystem.Options;
+using RealTimeInventorySystem.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -60,6 +61,29 @@ builder.Services.AddSingleton<OutboxService>();
 // OutboxProcessor: BackgroundService que procesa la cola
 builder.Services.AddHostedService<OutboxProcessor>();
 
+// ── Semana 2: Nuevos tópicos ──────────────────────────────────────────────────
+
+// Ej. 2: Saga Pattern — orquestador in-memory con compensación
+builder.Services.AddSingleton<CheckoutSagaService>();
+
+// Ej. 3: Reintentos con Polly — FlakyGateway + ResilientPaymentService
+builder.Services.AddSingleton<FlakyPaymentGatewayService>();
+builder.Services.AddSingleton<ResilientPaymentService>();
+
+// Ej. 4: Service Bus simulado — Topic + Subscriptions + DLQ
+builder.Services.AddSingleton<InMemoryServiceBus>(sp =>
+{
+    var bus    = new InMemoryServiceBus(sp.GetRequiredService<ILogger<InMemoryServiceBus>>());
+    // Pre-registrar los tres suscriptores del escenario del ejercicio
+    bus.Subscribe("Inventory");
+    bus.Subscribe("Billing");
+    bus.Subscribe("Notifications");
+    return bus;
+});
+
+// Ej. 6: Observabilidad — métricas con System.Diagnostics.Metrics
+builder.Services.AddSingleton<AppMetrics>();
+
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -93,6 +117,9 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+// Ej. 6: CorrelationId middleware — debe ir antes de los controllers
+app.UseCorrelationId();
 
 app.UseRateLimiter();
 
