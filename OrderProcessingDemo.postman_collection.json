@@ -1,0 +1,422 @@
+{
+  "info": {
+    "name": "Order Processing Demo",
+    "_postman_id": "order-processing-demo",
+    "description": "Colección para testear los 5 tópicos del Order Processing Demo:\n1. Zero-Allocation Span Parser\n2. Idempotency-Key\n3. Optimistic Concurrency (ETag + If-Match)\n4. Options Pattern (IOptions / IOptionsSnapshot / IOptionsMonitor)\n5. Outbox Pattern",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://localhost:7247",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Parte 1 — Zero-Allocation Span Parser",
+      "item": [
+        {
+          "name": "1A. Import múltiples líneas",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/order-import",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "order-import"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "[\n  \"2026-06-08T12:30:15Z|ORD-1001|USER-99|250.50\",\n  \"2026-06-08T12:30:20Z|ORD-1002|USER-55|100.00\",\n  \"2026-06-08T12:31:00Z|ORD-1003|USER-12|499.99\"\n]",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Parsea múltiples líneas con formato Timestamp|OrderId|UserId|Amount usando ReadOnlySpan<char>. Devuelve el count y los records parseados."
+          }
+        },
+        {
+          "name": "1B. Parse línea única",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/order-import/single",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "order-import", "single"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "\"2026-06-08T12:30:15Z|ORD-1001|USER-99|250.50\"",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Parsea una sola línea y devuelve el OrderImportRecord."
+          }
+        },
+        {
+          "name": "1C. Import — body vacío (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/order-import",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "order-import"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "[]",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Debe retornar 400 BadRequest porque no se enviaron líneas."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Parte 2 — Idempotency-Key",
+      "item": [
+        {
+          "name": "2A. Primera orden — 201 Created",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "key-demo-001" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "orders"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"ORD-5001\",\n  \"customerId\": 42,\n  \"amount\": 199.99\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Primera vez que llega esta Idempotency-Key → 201 Created. Guardá la key 'key-demo-001' para los siguientes requests."
+          }
+        },
+        {
+          "name": "2B. Misma key + mismo body — 200 replay",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "key-demo-001" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "orders"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"ORD-5001\",\n  \"customerId\": 42,\n  \"amount\": 199.99\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Misma Idempotency-Key con el mismo body → 200 OK devolviendo la respuesta original (idempotente)."
+          }
+        },
+        {
+          "name": "2C. Misma key + body distinto — 409 Conflict",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "key-demo-001" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "orders"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"ORD-9999\",\n  \"customerId\": 99,\n  \"amount\": 999.00\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Misma Idempotency-Key pero con body diferente → 409 Conflict."
+          }
+        },
+        {
+          "name": "2D. Sin header Idempotency-Key — 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "orders"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"ORD-5002\",\n  \"customerId\": 10,\n  \"amount\": 50.00\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Falta el header Idempotency-Key → 400 BadRequest."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Parte 3 — Concurrencia optimista (ETag + If-Match)",
+      "item": [
+        {
+          "name": "3A. GET orden — obtener ETag",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const etag = pm.response.headers.get('ETag');",
+                  "if (etag) {",
+                  "    pm.collectionVariables.set('currentETag', etag);",
+                  "    console.log('ETag guardado:', etag);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/order-concurrency/ORD-1001",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "order-concurrency", "ORD-1001"]
+            },
+            "description": "Obtiene la orden ORD-1001 y extrae el ETag del header de respuesta. El test script guarda el ETag en la variable de colección 'currentETag' automáticamente."
+          }
+        },
+        {
+          "name": "3B. PUT con ETag correcto — 200 OK",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const etag = pm.response.headers.get('ETag');",
+                  "if (etag) {",
+                  "    pm.collectionVariables.set('currentETag', etag);",
+                  "    console.log('Nuevo ETag guardado:', etag);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "If-Match", "value": "{{currentETag}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/order-concurrency/ORD-1001",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "order-concurrency", "ORD-1001"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"Processing\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Actualiza la orden usando el ETag vigente → 200 OK. El ETag de la respuesta queda guardado en 'currentETag' para el siguiente request."
+          }
+        },
+        {
+          "name": "3C. PUT con ETag stale — 412 Precondition Failed",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "If-Match", "value": "\"UGVuZGluZy0x\"" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/order-concurrency/ORD-1001",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "order-concurrency", "ORD-1001"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"Shipped\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Envía el ETag original (ya desactualizado tras el PUT anterior) → 412 Precondition Failed. Simula el escenario de Lost Update."
+          }
+        },
+        {
+          "name": "3D. PUT sin If-Match — 400",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/order-concurrency/ORD-1001",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "order-concurrency", "ORD-1001"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"Cancelled\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Falta el header If-Match → 400 BadRequest."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Parte 4 — Options Pattern",
+      "item": [
+        {
+          "name": "4A. IOptions — config estática del arranque",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/payment-demo/static-config",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "payment-demo", "static-config"]
+            },
+            "description": "Devuelve los valores de PaymentGateway leídos con IOptions<T> — fijos al momento del arranque de la app. Modificar appsettings.json y reiniciar para ver el cambio."
+          }
+        },
+        {
+          "name": "4B. IOptionsSnapshot — feature flags por request",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/payment-demo/feature-flags",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "payment-demo", "feature-flags"]
+            },
+            "description": "Devuelve los feature flags leídos con IOptionsSnapshot<T> — se recalcula en cada request. Modificar appsettings.json en caliente y hacer el request de nuevo para ver el cambio sin reiniciar."
+          }
+        },
+        {
+          "name": "4C. IOptionsMonitor — charge con hot-reload",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/payment-demo/charge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "payment-demo", "charge"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 149.95\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Simula un cobro. PaymentGatewayService usa IOptionsMonitor — lee CurrentValue en cada llamada, no en el constructor. Cambiar el Endpoint en appsettings.json y ver el log sin reiniciar."
+          }
+        },
+        {
+          "name": "4C. Charge — amount negativo (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/payment-demo/charge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "payment-demo", "charge"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": -50\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Amount inválido → 400 BadRequest."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Parte 5 — Outbox Pattern",
+      "item": [
+        {
+          "name": "5A. Place order — 202 Accepted",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/outbox-demo/place-order",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "outbox-demo", "place-order"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"ORD-7001\",\n  \"customerId\": 15,\n  \"amount\": 320.00\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Acepta la orden, encola un OutboxMessage y responde 202 Accepted. El OutboxProcessor lo procesará en background ~2 segundos después."
+          }
+        },
+        {
+          "name": "5B. Place order — segunda orden",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/outbox-demo/place-order",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "outbox-demo", "place-order"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"ORD-7002\",\n  \"customerId\": 22,\n  \"amount\": 89.50\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Envía una segunda orden para ver PendingCount subir a 2 antes de que el worker drene la cola."
+          }
+        },
+        {
+          "name": "5C. Pending count — inmediato (debería ser > 0)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/outbox-demo/pending",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "outbox-demo", "pending"]
+            },
+            "description": "Consultar justo después de 5A/5B — debería mostrar PendingMessages > 0. Esperar ~2s y volver a llamar para ver que el OutboxProcessor drenó la cola."
+          }
+        },
+        {
+          "name": "5D. Pending count — tras ~2s (debería ser 0)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/outbox-demo/pending",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "outbox-demo", "pending"]
+            },
+            "description": "Llamar ~2 segundos después de 5C — el BackgroundService ya procesó los mensajes, PendingMessages debería ser 0."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -49,7 +49,7 @@ public class EfConcurrencyController : ControllerBase
     [HttpGet("inventory/{inventoryId:int}")]
     public async Task<IActionResult> GetInventory(int inventoryId)
     {
-        var inv = await _db.Inventories.FindAsync(inventoryId);
+        var inv = await _db.Inventories.FindAsync(long.Parse(inventoryId.ToString()));
 
         if (inv is null)
             return NotFound(new { Message = $"Inventory {inventoryId} no encontrado." });
@@ -79,7 +79,7 @@ public class EfConcurrencyController : ControllerBase
         if (ifVersion is null)
             return BadRequest(new { Message = "El header If-Version es requerido." });
 
-        var inv = await _db.Inventories.FindAsync(inventoryId);
+        var inv = await _db.Inventories.FindAsync(long.Parse(inventoryId.ToString()));
 
         if (inv is null)
             return NotFound();
