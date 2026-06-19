@@ -1,0 +1,838 @@
+{
+  "info": {
+    "name": "RealTimeInventorySystem — Demo Completo",
+    "_postman_id": "realtime-inventory-full-demo",
+    "description": "Colección completa de endpoints de demostración.\n\nSemana 1:\n  1. Zero-Allocation Span Parser\n  2. Idempotency-Key\n  3. Concurrencia Optimista (ETag + If-Match)\n  4. Options Pattern (IOptions / IOptionsSnapshot / IOptionsMonitor)\n  5. Outbox Pattern (in-memory)\n\nSemana 2:\n  6. Outbox Pattern con transacción SQL\n  7. Saga Pattern con compensación\n  8. Reintentos con Polly (backoff + jitter + Circuit Breaker)\n  9. Azure Service Bus simulado (Topic + Subscriptions + DLQ)\n  10. Concurrencia Optimista con EF Core (RowVersion)\n  11. Observabilidad (CorrelationId + Spans + Métricas)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://localhost:7247",
+      "type": "string"
+    },
+    {
+      "key": "currentETag",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+
+    {
+      "name": "Semana 1",
+      "item": [
+
+        {
+          "name": "1 — Zero-Allocation Span Parser",
+          "item": [
+            {
+              "name": "1A. Import múltiples líneas",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/order-import",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "order-import"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "[\n  \"2026-06-08T12:30:15Z|ORD-1001|USER-99|250.50\",\n  \"2026-06-08T12:30:20Z|ORD-1002|USER-55|100.00\",\n  \"2026-06-08T12:31:00Z|ORD-1003|USER-12|499.99\"\n]",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Parsea múltiples líneas Timestamp|OrderId|UserId|Amount usando ReadOnlySpan<char> — sin Split, sin Substring, sin Regex. Devuelve el count y los records parseados."
+              }
+            },
+            {
+              "name": "1B. Parse línea única",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/order-import/single",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "order-import", "single"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "\"2026-06-08T12:30:15Z|ORD-1001|USER-99|250.50\"",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Parsea una sola línea y devuelve el OrderImportRecord."
+              }
+            },
+            {
+              "name": "1C. Body vacío — 400",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/order-import",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "order-import"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "[]",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Array vacío → 400 BadRequest."
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "2 — Idempotency-Key",
+          "item": [
+            {
+              "name": "2A. Primera orden — 201 Created",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Idempotency-Key", "value": "key-demo-001" }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "orders"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"orderId\": \"ORD-5001\",\n  \"customerId\": 42,\n  \"amount\": 199.99\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Primera vez con esta Idempotency-Key → 201 Created."
+              }
+            },
+            {
+              "name": "2B. Misma key + mismo body — 200 replay",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Idempotency-Key", "value": "key-demo-001" }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "orders"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"orderId\": \"ORD-5001\",\n  \"customerId\": 42,\n  \"amount\": 199.99\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Misma key + mismo body → 200 OK con la respuesta original (idempotente, no reprocesa)."
+              }
+            },
+            {
+              "name": "2C. Misma key + body distinto — 409 Conflict",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Idempotency-Key", "value": "key-demo-001" }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "orders"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"orderId\": \"ORD-9999\",\n  \"customerId\": 99,\n  \"amount\": 999.00\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Misma key pero body diferente → 409 Conflict."
+              }
+            },
+            {
+              "name": "2D. Sin header Idempotency-Key — 400",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/orders",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "orders"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"orderId\": \"ORD-5002\",\n  \"customerId\": 10,\n  \"amount\": 50.00\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Sin header Idempotency-Key → 400 BadRequest."
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "3 — Concurrencia Optimista (ETag + If-Match)",
+          "item": [
+            {
+              "name": "3A. GET orden — obtener ETag",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "const etag = pm.response.headers.get('ETag');",
+                      "if (etag) {",
+                      "    pm.collectionVariables.set('currentETag', etag);",
+                      "    console.log('ETag guardado:', etag);",
+                      "}"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/order-concurrency/ORD-1001",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "order-concurrency", "ORD-1001"]
+                },
+                "description": "Devuelve la orden con su ETag en el header. El test script guarda el ETag en la variable 'currentETag' automáticamente."
+              }
+            },
+            {
+              "name": "3B. PUT con ETag correcto — 200 OK",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "const etag = pm.response.headers.get('ETag');",
+                      "if (etag) {",
+                      "    pm.collectionVariables.set('currentETag', etag);",
+                      "    console.log('Nuevo ETag guardado:', etag);",
+                      "}"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "PUT",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "If-Match", "value": "{{currentETag}}" }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/order-concurrency/ORD-1001",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "order-concurrency", "ORD-1001"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"Processing\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "PUT con el ETag vigente → 200 OK. Actualiza el ETag en la variable para el siguiente request."
+              }
+            },
+            {
+              "name": "3C. PUT con ETag stale — 412 Precondition Failed",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "If-Match", "value": "\"UGVuZGluZy0x\"" }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/order-concurrency/ORD-1001",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "order-concurrency", "ORD-1001"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"Shipped\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "ETag original (desactualizado) → 412 Precondition Failed. Simula el escenario de Lost Update."
+              }
+            },
+            {
+              "name": "3D. PUT sin If-Match — 400",
+              "request": {
+                "method": "PUT",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/order-concurrency/ORD-1001",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "order-concurrency", "ORD-1001"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"Cancelled\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Sin If-Match → 400 BadRequest."
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "4 — Options Pattern",
+          "item": [
+            {
+              "name": "4A. IOptions — config estática del arranque",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/payment-demo/static-config",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "payment-demo", "static-config"]
+                },
+                "description": "IOptions<T>: valor leído una sola vez al arrancar la app. Reiniciar para ver cambios de appsettings.json."
+              }
+            },
+            {
+              "name": "4B. IOptionsSnapshot — feature flags por request",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/payment-demo/feature-flags",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "payment-demo", "feature-flags"]
+                },
+                "description": "IOptionsSnapshot<T>: se recalcula en cada request. Modificar appsettings.json en caliente y volver a llamar para ver el cambio sin reiniciar."
+              }
+            },
+            {
+              "name": "4C. IOptionsMonitor — charge con hot-reload",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/payment-demo/charge",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "payment-demo", "charge"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"amount\": 149.95\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "IOptionsMonitor<T>: singleton que lee CurrentValue en cada uso. El Endpoint se actualiza en caliente sin reiniciar."
+              }
+            },
+            {
+              "name": "4C. Charge — amount negativo (400)",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/payment-demo/charge",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "payment-demo", "charge"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"amount\": -50\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Amount inválido → 400 BadRequest."
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "5 — Outbox Pattern (in-memory)",
+          "item": [
+            {
+              "name": "5A. Place order — 202 Accepted",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/outbox-demo/place-order",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "outbox-demo", "place-order"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"orderId\": \"ORD-7001\",\n  \"customerId\": 15,\n  \"amount\": 320.00\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Encola un OutboxMessage en memoria y responde 202 Accepted. El OutboxProcessor lo procesa en background ~2 segundos después."
+              }
+            },
+            {
+              "name": "5B. Place order — segunda orden",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/outbox-demo/place-order",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "outbox-demo", "place-order"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"orderId\": \"ORD-7002\",\n  \"customerId\": 22,\n  \"amount\": 89.50\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Segunda orden para ver PendingCount = 2."
+              }
+            },
+            {
+              "name": "5C. Pending count — inmediato (> 0)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/outbox-demo/pending",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "outbox-demo", "pending"]
+                },
+                "description": "Consultar justo después de 5A/5B → PendingMessages > 0."
+              }
+            },
+            {
+              "name": "5D. Pending count — tras ~2s (= 0)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/outbox-demo/pending",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "outbox-demo", "pending"]
+                },
+                "description": "Llamar ~2 segundos después → BackgroundService drenó la cola → PendingMessages = 0."
+              }
+            }
+          ]
+        }
+
+      ]
+    },
+
+    {
+      "name": "Semana 2",
+      "item": [
+
+        {
+          "name": "6 — Outbox Pattern con transacción SQL",
+          "item": [
+            {
+              "name": "6A. Place order — transacción atómica",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/sql-outbox-demo/place-order",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "sql-outbox-demo", "place-order"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"orderId\": \"ORD-8001\",\n  \"customerId\": 30,\n  \"amount\": 450.00\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Demuestra el patrón de transacción atómica:\n  BEGIN TRANSACTION\n    INSERT Orders ...\n    INSERT OutboxMessages ...\n  COMMIT\nSi la app cae antes de publicar el evento, el OutboxProcessor lo reintenta al reiniciar.\nSin migración: cae a in-memory como fallback y lo indica en la respuesta."
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "7 — Saga Pattern con compensación",
+          "item": [
+            {
+              "name": "7A. Checkout exitoso (amount ≤ 1000) — Completed",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/saga-demo/checkout",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "saga-demo", "checkout"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"orderId\": \"ORD-SAGA-01\",\n  \"customerId\": 10,\n  \"amount\": 500.00\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "amount ≤ 1000 → todos los pasos completan:\n  CreateOrder → ReserveInventory → ChargePayment → SendConfirmation\nStatus final: Completed"
+              }
+            },
+            {
+              "name": "7B. Checkout con fallo en cobro (amount > 1000) — Compensated",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/saga-demo/checkout",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "saga-demo", "checkout"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"orderId\": \"ORD-SAGA-02\",\n  \"customerId\": 10,\n  \"amount\": 1500.00\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "amount > 1000 → ChargePayment lanza excepción.\nEl orquestador compensa en orden inverso:\n  ReleaseInventory → CancelOrder\nStatus final: Compensated\nRevisá CompletedSteps y CompensatedSteps en la respuesta."
+              }
+            },
+            {
+              "name": "7C. GET estado de saga por ID",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/saga-demo/{{sagaId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "saga-demo", "{{sagaId}}"]
+                },
+                "description": "Consultá el estado de una saga usando el SagaId devuelto en 7A o 7B.\nPegá el SagaId en la variable de colección 'sagaId' antes de correr este request."
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "8 — Reintentos con Polly (Retry + Circuit Breaker)",
+          "item": [
+            {
+              "name": "8A. failTimes=3 → Polly recupera en el 4to intento — OK",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/retry-demo/charge",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "retry-demo", "charge"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"clientId\": \"client-A\",\n  \"amount\": 200.00,\n  \"failTimes\": 3\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Gateway falla 3 veces → Polly hace 3 reintentos con exponential backoff + jitter → 4to intento exitoso.\nRevisá los logs: verás los warnings de cada retry con el delay calculado."
+              }
+            },
+            {
+              "name": "8B. failTimes=4 → agota reintentos — 502",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/retry-demo/charge",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "retry-demo", "charge"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"clientId\": \"client-B\",\n  \"amount\": 200.00,\n  \"failTimes\": 4\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Gateway falla 4 veces → supera MaxRetryAttempts=3 → 502 Bad Gateway.\nPolly agotó todos los reintentos sin éxito."
+              }
+            },
+            {
+              "name": "8C. failTimes=0 → éxito en el primer intento",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/retry-demo/charge",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "retry-demo", "charge"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"clientId\": \"client-C\",\n  \"amount\": 99.00,\n  \"failTimes\": 0\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Gateway responde OK en el primer intento. Sin reintentos necesarios."
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "9 — Azure Service Bus simulado (Topic + Subscriptions + DLQ)",
+          "item": [
+            {
+              "name": "9A. Publicar OrderCreated al topic",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/servicebus-demo/publish",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "servicebus-demo", "publish"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"orderId\": 123,\n  \"amount\": 500\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Publica el evento OrderCreated al topic.\nLos 3 suscriptores (Inventory, Billing, Notifications) reciben cada uno su copia independiente.\nEsto es lo que NO ocurre con Queue (que solo entrega a uno)."
+              }
+            },
+            {
+              "name": "9B. Inventory consume su mensaje",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/servicebus-demo/receive/Inventory",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "servicebus-demo", "receive", "Inventory"]
+                },
+                "description": "Inventory lee su próximo mensaje pendiente. Copiá el MessageId de la respuesta para Complete o Abandon."
+              }
+            },
+            {
+              "name": "9C. Billing consume su mensaje",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/servicebus-demo/receive/Billing",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "servicebus-demo", "receive", "Billing"]
+                },
+                "description": "Billing lee su copia del mismo evento. Independiente de Inventory."
+              }
+            },
+            {
+              "name": "9D. Notifications consume su mensaje",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/servicebus-demo/receive/Notifications",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "servicebus-demo", "receive", "Notifications"]
+                },
+                "description": "Notifications lee su copia. Si este suscriptor estuviera caído, su cola acumula mensajes sin afectar a los otros."
+              }
+            },
+            {
+              "name": "9E. Complete — Inventory procesó OK",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/servicebus-demo/complete",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "servicebus-demo", "complete"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"subscriber\": \"Inventory\",\n  \"messageId\": \"PEGAR-GUID-DEL-PASO-9B\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Inventory completó el procesamiento → mensaje eliminado de su cola.\nReemplazá PEGAR-GUID-DEL-PASO-9B con el MessageId obtenido en 9B."
+              }
+            },
+            {
+              "name": "9F. Abandon × 3 → DLQ (Notifications falla)",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/servicebus-demo/abandon",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "servicebus-demo", "abandon"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"subscriber\": \"Notifications\",\n  \"messageId\": \"PEGAR-GUID-DEL-PASO-9D\",\n  \"reason\": \"Email service timeout\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Llamar este request 3 veces con el mismo MessageId.\n  1ra vez: DeliveryCount=1, reencola\n  2da vez: DeliveryCount=2, reencola\n  3ra vez: DeliveryCount=3, va al DLQ\nDespués consultá 9G para ver el mensaje en Dead Letter Queue."
+              }
+            },
+            {
+              "name": "9G. Ver Dead Letter Queue",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/servicebus-demo/dlq",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "servicebus-demo", "dlq"]
+                },
+                "description": "Muestra los mensajes que fallaron MaxDeliveryCount veces.\nEn Azure: accesible como <topic>/subscriptions/<name>/$DeadLetterQueue\nRequieren intervención manual o re-procesamiento con lógica especial."
+              }
+            },
+            {
+              "name": "9H. Ver mensajes pendientes por suscriptor",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/servicebus-demo/pending/Billing",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "servicebus-demo", "pending", "Billing"]
+                },
+                "description": "Muestra todos los mensajes pendientes de Billing. Cambiá 'Billing' por 'Inventory' o 'Notifications' según necesites."
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "10 — Concurrencia Optimista con EF Core (RowVersion)",
+          "item": [
+            {
+              "name": "10A. GET Inventory — obtener Version actual",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/ef-concurrency/inventory/1",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "ef-concurrency", "inventory", "1"]
+                },
+                "description": "Devuelve el Inventory con su Version (token de concurrencia).\nUsá ese valor en el header If-Version del PUT.\n\nCon [Timestamp] / IsRowVersion() en SQL Server, EF Core genera:\n  UPDATE Inventory SET Quantity = @q WHERE Id = @id AND RowVersion = @version\nSi 0 rows affected → DbUpdateConcurrencyException → 409 Conflict"
+              }
+            },
+            {
+              "name": "10B. PUT con Version correcta — actualización exitosa",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "If-Version", "value": "PEGAR-VERSION-DEL-PASO-10A" }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/ef-concurrency/inventory/1",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "ef-concurrency", "inventory", "1"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"quantityDelta\": 10\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "PUT con la Version actual → EF Core actualiza correctamente.\nLa Version se incrementa. Usá el nuevo valor para el siguiente PUT."
+              }
+            },
+            {
+              "name": "10C. PUT con Version stale — 409 Conflict",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "If-Version", "value": "1" }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/ef-concurrency/inventory/1",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "ef-concurrency", "inventory", "1"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"quantityDelta\": 5\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Version=1 (original, ya desactualizada) → 409 Conflict.\nSimula el escenario donde Usuario A y B leen Version=1, A actualiza primero, B intenta con Version stale.\n409 vs 412:\n  409 Conflict       → conflicto de negocio (semántica general)\n  412 Precondition Failed → el cliente envió ETag/Version y no coincidió (más específico para REST)"
+              }
+            },
+            {
+              "name": "10D. PUT sin If-Version — 400",
+              "request": {
+                "method": "PUT",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/ef-concurrency/inventory/1",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "ef-concurrency", "inventory", "1"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"quantityDelta\": 5\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Sin header If-Version → 400 BadRequest."
+              }
+            }
+          ]
+        },
+
+        {
+          "name": "11 — Observabilidad (CorrelationId + Spans + Métricas)",
+          "item": [
+            {
+              "name": "11A. Checkout rápido (amount ≤ 500)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "X-Correlation-Id", "value": "traza-mentor-001" }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/observability-demo/checkout",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "observability-demo", "checkout"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"orderId\": \"ORD-OBS-01\",\n  \"userId\": \"USER-42\",\n  \"amount\": 300.00\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Checkout normal. La respuesta incluye:\n  - CorrelationId: propagado desde el header X-Correlation-Id\n  - Spans: CreateOrder, ReserveInventory, ChargePayment, SendEmail con ElapsedMs individual\n  - TotalMs: suma de todos los spans\nRevisá también los logs del servidor — verás el CorrelationId en cada línea."
+              }
+            },
+            {
+              "name": "11B. Checkout lento — ChargePayment tarda (amount > 500)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "X-Correlation-Id", "value": "traza-mentor-002" }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/observability-demo/checkout",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "observability-demo", "checkout"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"orderId\": \"ORD-OBS-02\",\n  \"userId\": \"USER-42\",\n  \"amount\": 800.00\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "amount > 500 → ChargePayment simula latencia alta (~400ms).\nEsto replica el escenario del Ejercicio 6: 'un usuario reporta que el checkout tardó 18 segundos'.\nComparando los spans entre 11A y 11B podés identificar exactamente qué paso fue el cuello de botella."
+              }
+            },
+            {
+              "name": "11C. Sin CorrelationId — genera uno automáticamente",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{baseUrl}}/api/observability-demo/checkout",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "observability-demo", "checkout"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"orderId\": \"ORD-OBS-03\",\n  \"userId\": \"USER-55\",\n  \"amount\": 150.00\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Sin header X-Correlation-Id → el middleware genera uno automáticamente (Guid).\nLo verás en el header X-Correlation-Id de la respuesta y en el campo CorrelationId del body."
+              }
+            }
+          ]
+        }
+
+      ]
+    }
+
+  ]
+}
