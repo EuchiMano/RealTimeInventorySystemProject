@@ -1,225 +1,165 @@
-# Real-Time Inventory System - Microservice
+# Real-Time Inventory System
 
-A high-concurrency .NET 8 microservice for managing inventory across multiple warehouses with REST API endpoints, rate limiting, and Azure SQL Database integration.
+ASP.NET Core 8 Web API para gestión de inventario multi-almacén, extendido con demos aplicados de patrones de arquitectura distribuida.
 
-## Project Structure
+## Setup
 
-```
-RealTimeInventorySystem/
-├── Models/                  # Database entities
-│   ├── Product.cs
-│   ├── Warehouse.cs
-│   ├── Inventory.cs
-│   └── InventoryMovement.cs
-├── Data/                    # Database context
-│   └── InventoryDbContext.cs
-├── Repositories/            # Data access layer
-│   ├── IInventoryRepository.cs
-│   └── InventoryRepository.cs
-├── Services/                # Business logic
-│   ├── IInventoryService.cs
-│   └── InventoryService.cs
-├── Controllers/             # API endpoints
-│   └── InventoryController.cs
-├── DTOs/                    # Data transfer objects
-│   └── Dtos.cs
-├── Program.cs               # Application configuration
-├── appsettings.json         # Configuration settings
-└── RealTimeInventorySystem.csproj
-```
-
-## Setup Instructions
-
-### Prerequisites
-- .NET 8 SDK
-- SQL Server (or Azure SQL Database)
-- Visual Studio Code or Visual Studio
-
-### 1. Install NuGet Dependencies
+**Requisitos:** .NET 8 SDK · SQL Server · Postman (para los demos)
 
 ```bash
-cd RealTimeInventorySystem
 dotnet restore
-```
-
-### 2. Configure Database Connection
-
-Update `appsettings.json` with your Azure SQL Database connection string:
-
-```json
-{
-  "ConnectionStrings": {
-    "DefaultConnection": "Server=tcp:yourserver.database.windows.net,1433;Initial Catalog=inventorydb;Persist Security Info=False;User ID=sqladmin;Password=YourPassword!;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
-  }
-}
-```
-
-Replace:
-- `yourserver`: Your Azure SQL Server name
-- `YourPassword`: Your Azure SQL admin password
-
-### 3. Create Database & Migrations
-
-```bash
-dotnet ef migrations add InitialCreate
-dotnet ef database update
-```
-
-### 4. Run the Application
-
-```bash
+dotnet ef database update   # requiere connection string en user secrets
 dotnet run
 ```
 
-The API will be available at: `https://localhost:5001`
+Swagger: `https://localhost:7247/swagger`  
+Colección Postman: `RealTimeInventorySystem.Demo.postman_collection.json` (raíz del repo)
 
-Swagger UI: `https://localhost:5001/` (when running in Development)
+---
 
-## API Endpoints
+## API de Inventario
 
-### Get Stock for Product in Warehouse
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/api/inventory/{productId}/warehouses/{warehouseId}` | Stock de un producto en un almacén |
+| PATCH | `/api/inventory/{productId}/stock` | Actualizar stock (idempotente, rate-limited) |
+| GET | `/api/inventory/product/{productId}` | Stock en todos los almacenes |
+| GET | `/api/inventory/warehouse/{warehouseId}` | Inventario completo de un almacén |
+
+Rate limiting: 100 req/min por IP → 429 Too Many Requests.
+
+---
+
+## Demos de Patrones — Semana 1
+
+### 1. Zero-Allocation Span Parser
+Parser de líneas CSV usando `ReadOnlySpan<char>` — sin `Split`, sin `Substring`, sin Regex.
+
+| Método | Ruta |
+|--------|------|
+| POST | `/api/order-import` |
+| POST | `/api/order-import/single` |
+
+### 2. Idempotency-Key
+Garantiza que la misma orden no se procese dos veces usando `ConcurrentDictionary`.
+
+| Caso | Resultado |
+|------|-----------|
+| Primera vez con la key | 201 Created |
+| Misma key + mismo body | 200 OK (replay) |
+| Misma key + body distinto | 409 Conflict |
+
+Endpoint: `POST /api/orders` · Header: `Idempotency-Key: <uuid>`
+
+### 3. Concurrencia Optimista (ETag + If-Match)
+Detecta Lost Updates con ETag versionado.
+
+| Método | Ruta |
+|--------|------|
+| GET | `/api/order-concurrency/{orderId}` |
+| PUT | `/api/order-concurrency/{orderId}` |
+
+ETag stale → 412 Precondition Failed.
+
+### 4. Options Pattern
+Tres variantes de configuración en caliente.
+
+| Endpoint | Variante | Comportamiento |
+|----------|----------|----------------|
+| GET `/api/payment-demo/static-config` | `IOptions<T>` | Leído una vez al arrancar |
+| GET `/api/payment-demo/feature-flags` | `IOptionsSnapshot<T>` | Recalculado por request |
+| POST `/api/payment-demo/charge` | `IOptionsMonitor<T>` | Hot-reload sin reiniciar |
+
+### 5. Outbox Pattern (in-memory)
+`ConcurrentQueue` + `BackgroundService` que drena la cola cada 2 segundos.
+
+| Método | Ruta |
+|--------|------|
+| POST | `/api/outbox-demo/place-order` |
+| GET | `/api/outbox-demo/pending` |
+
+---
+
+## Demos de Patrones — Semana 2
+
+### 6. Outbox Pattern con transacción SQL
+Demuestra la atomicidad correcta: orden + evento en la **misma transacción DB**.
+
 ```
-GET /api/inventory/{productId}/warehouses/{warehouseId}
-```
-
-### Update Stock (IDEMPOTENT - Rate Limited to 100 req/min per IP)
-```
-PATCH /api/inventory/{productId}/stock
-Content-Type: application/json
-
-{
-  "warehouseId": 1,
-  "quantity": 50,
-  "reason": "Manual adjustment"
-}
-```
-
-### Get Product Stock Across All Warehouses
-```
-GET /api/inventory/product/{productId}
-```
-
-### Get Warehouse Inventory
-```
-GET /api/inventory/warehouse/{warehouseId}
-```
-
-### Health Check
-```
-GET /health
-```
-
-## Key Features
-
-### 1. **Idempotent PATCH Endpoint**
-- Sets final stock quantity value (not relative updates)
-- Multiple calls with same data = same result
-- Safe for high-concurrency scenarios
-
-### 2. **Rate Limiting**
-- **100 requests per minute per IP address**
-- Implemented via `SemaphoreSlim` in middleware
-- Prevents API abuse and system overload
-- Returns 429 (Too Many Requests) when limit exceeded
-
-### 3. **Async/Await Pattern**
-- All I/O operations are non-blocking
-- Uses `Task.Delay` instead of `Thread.Sleep`
-- Prevents thread pool starvation
-
-### 4. **Proper Resource Management**
-- `InventoryService` implements `IDisposable`
-- Proper disposal of DbContext
-- Uses `using` statements for resource cleanup
-
-### 5. **Database Optimization**
-- Composite indices on (ProductId, WarehouseId)
-- Separate indices for individual column searches
-- Foreign keys with cascade delete
-- Unique constraints to prevent duplicates
-
-## Configuration Files
-
-### Program.cs
-- Database context registration
-- Dependency injection setup
-- Rate limiting middleware
-- Swagger documentation configuration
-
-### appsettings.json
-- Connection string
-- Logging levels
-- Rate limiting policies
-
-## Testing with Swagger
-
-1. Navigate to `https://localhost:5001`
-2. Click on any endpoint to expand it
-3. Click "Try it out"
-4. Enter parameters and click "Execute"
-5. View responses
-
-Example PATCH request:
-```
-PATCH /api/inventory/1/stock
-
-{
-  "warehouseId": 1,
-  "quantity": 100,
-  "reason": "Restock from supplier"
-}
+BEGIN TRANSACTION
+  INSERT Orders ...
+  INSERT OutboxMessages ...    ← mismo commit
+COMMIT
 ```
 
-## Performance Considerations
+Si la app cae antes de publicar el evento, el worker lo reintenta al reiniciar.  
+Endpoint: `POST /api/sql-outbox-demo/place-order`
 
-- **Async/Await**: Non-blocking I/O operations
-- **Indices**: 10,000x faster stock lookups
-- **SemaphoreSlim**: Rate limiting without thread blocking
-- **Entity Framework**: LINQ queries compiled to SQL
-- **Span<T>**: Memory-efficient string parsing
+### 7. Saga Pattern con compensación
+Orquestador in-memory que ejecuta pasos secuenciales y compensa en orden inverso si alguno falla.
 
-## Architecture Pattern
+| amount | Resultado |
+|--------|-----------|
+| ≤ 1000 | `Completed` — 4 pasos completados |
+| > 1000 | `Compensated` — cobro rechazado → libera inventario → cancela orden |
 
-This project uses:
-- **Repository Pattern**: Data access abstraction
-- **Service Layer**: Business logic separation
-- **Dependency Injection**: Loose coupling
-- **DTOs**: API contracts
-- **IDisposable**: Resource management
+| Método | Ruta |
+|--------|------|
+| POST | `/api/saga-demo/checkout` |
+| GET | `/api/saga-demo/{sagaId}` |
 
-## Next Steps
+### 8. Reintentos con Polly
+Pipeline: **Retry** (3 reintentos, exponential backoff + jitter) → **Circuit Breaker** (se abre si ≥50% de llamadas fallan).
 
-- Deploy to Azure Container Registry
-- Deploy to Azure App Service
-- Add authentication & authorization
-- Implement caching with Redis
-- Add comprehensive logging & monitoring
-- Load testing for concurrency validation
-- Add unit and integration tests
+| failTimes | Resultado |
+|-----------|-----------|
+| ≤ 3 | Polly recupera → 200 OK |
+| > 3 | Agota reintentos → 502 |
 
-## Environment Variables
+Endpoint: `POST /api/retry-demo/charge`
 
-For production, use Azure Key Vault or environment variables:
+### 9. Azure Service Bus simulado
+Topic + 3 subscriptions independientes (Inventory, Billing, Notifications) + Dead Letter Queue.
+
+| Método | Ruta | Acción |
+|--------|------|--------|
+| POST | `/api/servicebus-demo/publish` | Publica a todos los suscriptores |
+| GET | `/api/servicebus-demo/receive/{subscriber}` | Consume el próximo mensaje |
+| POST | `/api/servicebus-demo/complete` | Marca como procesado |
+| POST | `/api/servicebus-demo/abandon` | Falla entrega (×3 → DLQ) |
+| GET | `/api/servicebus-demo/dlq` | Ver Dead Letter Queue |
+
+### 10. Concurrencia Optimista con EF Core
+Muestra `IsConcurrencyToken()` sobre el campo `Version` del Inventory real (EF Core + SQL Server).
+
+```sql
+-- SQL que genera EF Core internamente:
+UPDATE Inventory SET Quantity = @q WHERE Id = @id AND Version = @version
+-- 0 rows → DbUpdateConcurrencyException → 409 Conflict
 ```
-CONNECTIONSTRING_DEFAULTCONNECTION=your_connection_string
-ASPNETCORE_ENVIRONMENT=Production
-```
 
-## Troubleshooting
+| Método | Ruta |
+|--------|------|
+| GET | `/api/ef-concurrency/inventory/{id}` |
+| PUT | `/api/ef-concurrency/inventory/{id}` |
 
-### "Connection string 'DefaultConnection' not found"
-- Ensure `appsettings.json` has the correct connection string
-- Check server name and credentials
+Header requerido: `If-Version: <valor obtenido del GET>`
 
-### "429 Too Many Requests"
-- You've exceeded 100 requests per minute from your IP
-- Wait 1 minute for the limit to reset
+### 11. Observabilidad
+Tres pilares implementados:
 
-### Migrations Failed
-- Ensure database exists on SQL Server
-- Check connection string
-- Run: `dotnet ef database update`
+- **Logs:** `ILogger` con campos estructurados (`CorrelationId`, `OrderId`, `UserId`, `ElapsedMs`)
+- **Traces:** spans por paso (`CreateOrder`, `ReserveInventory`, `ChargePayment`, `SendEmail`) con `ElapsedMs` individual
+- **Métricas:** `System.Diagnostics.Metrics` — `Counter` (checkouts iniciados/completados/fallidos) y `Histogram` (duración)
+- **CorrelationId middleware:** lee `X-Correlation-Id` del header o genera uno; lo propaga a todos los logs del request
 
-## License
+Endpoint: `POST /api/observability-demo/checkout`  
+Tip: enviá `X-Correlation-Id: mi-traza-123` para ver el ID propagado en logs y respuesta.
 
-Educational Project - Real-Time Inventory System Microservice
+---
+
+## Tecnologías
+
+- ASP.NET Core 8 · Entity Framework Core 8 · SQL Server
+- Polly v8 (resiliencia y reintentos)
+- System.Diagnostics.Metrics (métricas built-in .NET)
