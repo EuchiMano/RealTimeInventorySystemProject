@@ -1,0 +1,179 @@
+{
+  "info": {
+    "name": "Week 3 Exercises — Polly + Idempotencia",
+    "_postman_id": "week3-exercises-demo",
+    "description": "Ejercicio 1: Resiliencia con Polly (Retry + Backoff + Jitter + Circuit Breaker)\nEjercicio 2: Azure Service Bus + Idempotencia en consumidor",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://localhost:7247",
+      "type": "string"
+    }
+  ],
+  "item": [
+
+    {
+      "name": "Ejercicio 1 — Resiliencia con Polly",
+      "item": [
+
+        {
+          "name": "1A. POST /payments — fallas aleatorias (correr varias veces)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/payments",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "payments"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"ORD-PAY-001\",\n  \"amount\": 250.00\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Gateway con fallas aleatorias:\n  30% → TimeoutException     → Polly reintenta\n  20% → HttpRequestException (500) → Polly reintenta\n  50% → Success               → responde OK\n\nPolly pipeline:\n  Retry: 3 intentos con exponential backoff (1s → 2s → 4s) + jitter\n  Circuit Breaker: abre tras 5 fallos en 30s, permanece abierto 15s\n\nACCIÓN: Corré este request varias veces seguidas.\n  - A veces responde 200 de primera\n  - A veces verás los reintentos en los logs del servidor\n  - Si fallás muchas veces seguido → el Circuit Breaker se abre → 503"
+          }
+        },
+
+        {
+          "name": "1B. POST /payments — amount negativo (400, no reintentado)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/payments",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "payments"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"ORD-PAY-002\",\n  \"amount\": -100\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Amount negativo → 400 Bad Request.\nPolly NO reintenta los 400 — son errores del cliente, no del gateway.\nEl problema está en el request, no en el servicio externo.\n\nErrores que SÍ se reintentan:  TimeoutException, HttpRequestException (500)\nErrores que NO se reintentan:   400, 401, 409 — permanentes, reintentar no cambia nada"
+          }
+        },
+
+        {
+          "name": "1C. POST /payments — forzar Circuit Breaker abierto",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/payments",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "payments"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"ORD-PAY-CB-001\",\n  \"amount\": 500.00\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "INSTRUCCIONES para triggerear el Circuit Breaker:\n\n1. Corré este request repetidamente (usa el runner de Postman o F2 varias veces)\n2. El gateway falla ~50% de las veces\n3. Después de suficientes fallos en 30s → el circuito se abre → respuesta 503\n4. Al recibir el 503: Circuit Breaker ABIERTO — rechaza llamadas sin intentar llegar al gateway\n5. Esperá 15 segundos → Half-Open → el próximo request es la llamada de prueba\n6. Si esa llamada tiene éxito → Circuit Breaker CERRADO → operación normal\n\nRevisá los logs del servidor para ver las transiciones: ABIERTO → HALF-OPEN → CERRADO"
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "Ejercicio 2 — Azure Service Bus + Idempotencia",
+      "item": [
+
+        {
+          "name": "2A. Primera entrega — mensaje procesado normalmente",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/idempotency-demo/process-message",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "idempotency-demo", "process-message"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"messageId\": \"msg-sb-00001\",\n  \"orderId\": \"ORD-123\",\n  \"quantity\": 5\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Primera entrega del mensaje OrderId=123 desde Service Bus.\nEl consumidor:\n  1. Busca msg-sb-00001 en ProcessedMessages → no existe\n  2. Reserva inventario en DB\n  3. Guarda msg-sb-00001 en ProcessedMessages\n  4. Complete al Service Bus\n\nRespuesta: PROCESSED"
+          }
+        },
+
+        {
+          "name": "2B. Reentrega tras crash — duplicado detectado (mismo messageId)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/idempotency-demo/process-message",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "idempotency-demo", "process-message"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"messageId\": \"msg-sb-00001\",\n  \"orderId\": \"ORD-123\",\n  \"quantity\": 5\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "MISMO messageId que 2A — simula la reentrega del Service Bus tras un crash.\n\nEl lock del mensaje expiró sin que el consumidor enviara Complete.\nService Bus lo reentrega. El consumidor:\n  1. Busca msg-sb-00001 en ProcessedMessages → YA EXISTE\n  2. Skip sin reprocesar\n  3. Complete al Service Bus (elimina el mensaje)\n\nRespuesta: SKIPPED — el inventario NO se duplica.\n\nEsto es 'at-least-once delivery + consumidor idempotente = effectively exactly-once'."
+          }
+        },
+
+        {
+          "name": "2C. Nuevo mensaje con messageId distinto — procesado normalmente",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/idempotency-demo/process-message",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "idempotency-demo", "process-message"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"messageId\": \"msg-sb-00002\",\n  \"orderId\": \"ORD-456\",\n  \"quantity\": 3\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "MessageId diferente → nuevo mensaje legítimo → se procesa normalmente.\nDemuestra que la idempotencia solo bloquea duplicados, no mensajes nuevos."
+          }
+        },
+
+        {
+          "name": "2D. Simular escenario crash completo (una sola llamada)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/idempotency-demo/simulate-crash-scenario",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "idempotency-demo", "simulate-crash-scenario"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"messageId\": \"msg-crash-demo-001\",\n  \"orderId\": \"ORD-CRASH-001\",\n  \"quantity\": 10\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Ejecuta el escenario completo de crash en una sola llamada:\n  Primera entrega  → PROCESSED (reserva inventario + guarda MessageId)\n  Crash simulado   → ...\n  Segunda entrega  → SKIPPED   (duplicado detectado por MessageId)\n\nLa respuesta muestra los dos resultados juntos con la conclusión.\nIdeal para mostrarle al mentor el comportamiento completo de un vistazo.\n\nUSA UN messageId NUEVO cada vez que corras este request — si el ID ya está\nen el store, ambas entregas aparecerán como SKIPPED."
+          }
+        },
+
+        {
+          "name": "2E. Ver tabla de mensajes procesados (ProcessedMessages store)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/idempotency-demo/processed-messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "idempotency-demo", "processed-messages"]
+            },
+            "description": "Muestra todos los MessageIds ya procesados con su timestamp.\nEquivale a hacer SELECT * FROM ProcessedMessages en SQL Server.\n\nEn producción esta tabla vive en la MISMA DB que el inventario.\nLa inserción del MessageId ocurre en la MISMA transacción que la reserva:\n  BEGIN TRANSACTION\n    INSERT InventoryReservations ...\n    INSERT ProcessedMessages (MessageId) ...\n  COMMIT\n\nSi el proceso crashea entre el INSERT y el COMMIT → rollback de ambos\n→ el mensaje se reintenta → el MessageId no está en la tabla → se reprocesa\n→ esta vez sí completa la transacción → MessageId guardado → futuros reintentos = SKIP"
+          }
+        }
+
+      ]
+    }
+
+  ]
+}
