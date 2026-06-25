@@ -4,6 +4,8 @@ using RealTimeInventorySystem.Services;
 using Microsoft.EntityFrameworkCore;
 using RealTimeInventorySystem.Options;
 using RealTimeInventorySystem.Middleware;
+using RealTimeInventorySystem.Services.Payments;
+using RealTimeInventorySystem.Services.Idempotency;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -60,6 +62,18 @@ builder.Services.AddScoped<FeatureFlagsService>();
 builder.Services.AddSingleton<OutboxService>();
 // OutboxProcessor: BackgroundService que procesa la cola
 builder.Services.AddHostedService<OutboxProcessor>();
+
+// ── Semana 3: Ejercicios Polly + Idempotencia ─────────────────────────────────
+
+// Ejercicio 1: Gateway simulado con fallas aleatorias + Polly resilience pipeline
+builder.Services.AddSingleton<IPaymentGateway, SimulatedPaymentGateway>();
+builder.Services.AddSingleton<ResilientPaymentGatewayService>();
+
+// Ejercicio 2: Consumidor idempotente con store de MessageIds procesados
+builder.Services.AddSingleton<InMemoryProcessedMessageStore>();
+builder.Services.AddSingleton<IProcessedMessageStore>(
+    sp => sp.GetRequiredService<InMemoryProcessedMessageStore>());
+builder.Services.AddSingleton<IdempotentInventoryProcessor>();
 
 // ── Semana 2: Nuevos tópicos ──────────────────────────────────────────────────
 
